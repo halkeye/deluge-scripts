@@ -1,0 +1,214 @@
+#!/usr/bin/perl 
+use strict;
+use warnings;
+
+use Data::Dumper;
+use JSON::Any;
+use LWP::UserAgent;
+use HTTP::Cookies;
+use File::Basename qw();
+use File::Copy qw();
+use File::HomeDir;
+use Config::Tiny;
+use Getopt::Long;
+
+#exit(1) unless $ENV{VIM}; # for now till deluge is on or i fix this
+
+my $showData = {
+    qr/^\[DB\]_Bleach_/ => '/mnt/Drobo02/Unsorted Anime/Bleach/',
+
+    qr/^American.Dad.S(\d+)/             => '/media/Videos/TV/American Dad/Season %d/',
+    qr/^[Bb]urn.[nN]otice.[Ss](\d+)[Ee]/ => '/media/Videos/TV/Burn Notice/Season %d/',
+    qr/^Californication.S(\d+)/          => '/media/Videos/TV/Californication/Season %d/',
+    qr/^Caprica.S(\d+)/                  => '/media/Videos/TV/Caprica/Season %d/',
+    qr/^Castle.2009.*S(\d+)E/            => '/media/Videos/TV/Castle (2009)/Season %d/',
+    qr/^Community.S(\d+)/                => '/media/Videos/TV/Community/',
+    qr/^Conan.\d+/                       => '/media/Videos/TV/Conan (2010)/',
+    qr/^Dan.[Ff]or.Mayor.S(\d+)/         => '/media/Videos/TV/Dan For Mayor/',
+    qr/^Dexter.S(\d+)/                   => '/media/Videos/TV/Dexter/Season %d/',
+    qr/^Doctor.Who.2005.S(\d+)E/         => '/media/Videos/TV/Doctor Who (2005)/Season %d/',
+    qr/^Dollhouse.S(\d+)/                => '/media/Videos/TV/Dollhouse/Season %d/',
+    qr/^Eureka.S(\d+)/                   => '/media/Videos/TV/Eureka/Season %d/',
+    qr/^Family.Guy.S(\d+)/               => '/media/Videos/TV/Family Guy/Season %d/',
+    qr/^FlashForward.S(\d+)/             => '/media/Videos/TV/FlashForward/Season %d/',
+    qr/^Flashpoint.S(\d+)/               => '/media/Videos/TV/Flashpoint/Season %d/',
+    qr/^Fringe.S(\d+)/                   => '/media/Videos/TV/Fringe/Season %d/',
+    qr/^Futurama.S(\d+)E/                => '/media/Videos/TV/Futurama/Season %d/',
+    qr/^Glee.S(\d+)/                     => '/media/Videos/TV/Glee/',
+    qr/^Haven.S(\d+)/                    => '/media/Videos/TV/Haven/',
+    qr/^Hawaii.Five-0.2010.S(\d+)/       => '/media/Videos/TV/Hawaii Five-0 (2010)/Season %02d/',
+    qr/^Hiccups.S(\d+)E/                 => '/media/Videos/TV/Hiccups/',
+    qr/^How.I.Met.Your.Mother.S(\d+)/    => '/media/Videos/TV/How I met your mother/Season %d/',
+    qr/^Kitchen Nightmares/              => '/media/Videos/TV/Kitchen Nightmares/',
+    qr/^Lost.Girl.S(\d+)/                => '/media/Videos/TV/Lost Girl/',
+    qr/^Louie.S(\d+)/                    => '/media/Videos/TV/Louie/',
+    qr/^Myth[bB]usters.S(\d+)/           => '/media/Videos/TV/MythBusters/Season %d/',
+    qr/^Nikita.S(\d+)/                   => '/media/Videos/TV/Nikita (2010)/',
+    qr/^No.Ordinary.Family.S(\d+)/       => '/media/Videos/TV/No Ordinary Family/Season %02d/',
+    qr/^Raising.Hope/                    => '/media/Videos/TV/Raising Hope',
+    qr/^Rookie.Blue.S(\d+)/              => '/media/Videos/TV/Rookie Blue/',
+    qr/^Rubicon.S(\d+)E/                 => '/media/Videos/TV/Rubicon/',
+    qr/^Scrubs.S(\d+)E/                  => '/media/Videos/TV/Scrubs/Season %d/',
+    qr/^Sherlock.(\d+)x/                 => '/media/Videos/TV/Sherlock/',
+    qr/^Sherlock.S(\d+)E/                => '/media/Videos/TV/Sherlock/',
+    qr/^Shit.My.Dad.Says.S(\d+)E/        => '/media/Videos/TV/Shit My Dad Says/',
+    qr/^Stargate.Universe.S(\d+)/        => '/media/Videos/TV/Stargate Universe/Season %d/',
+    qr/^Terriers.S(\d+)E/                => '/media/Videos/TV/Terriers',
+    qr/^The.Big.Bang.Theory.S(\d+)/      => '/media/Videos/TV/The Big Bang Theory/Season %d/',
+    qr/^The.Gates.S(\d+)/                => '/media/Videos/TV/The Gates/',
+    qr/^The.Glades./                     => '/media/Videos/TV/The Glades/',
+    qr/^The.Mentalist.S(\d+)/            => '/media/Videos/TV/The Mentalist/Season %d/',
+    qr/^The.Simpsons.S(\d+)/             => '/media/Videos/TV/The Simpsons/Season %d/',
+    qr/^The.Walking.Dead.S(\d+)/         => '/media/Videos/TV/The Walking Dead/',
+    qr/^[t|T]ower.[p|P]rep.*S(\d+)E/     => '/media/Videos/TV/Tower Prep/Season %d/',
+    qr/^Ugly.Americans.S(\d+)E/          => '/media/Videos/TV/Ugly Americans/',
+    qr/^V.2009.*/                        => '/media/Videos/TV/V (2009)/',
+};
+
+
+my ($debug, $configFile);
+$debug = 1 if $ENV{VIM};
+
+GetOptions (
+    "config=s"   => \$configFile,      # string
+    "debug"      => \$debug
+);  # flag
+
+# Open the config
+$configFile ||= File::Spec->catdir( File::HomeDir->my_home,'.feedDownloader');
+my $config = -e $configFile ? Config::Tiny->read( $configFile ) : Config::Tiny->new($configFile);
+die("Unable to load config file: $configFile") unless $config;
+
+sub debug 
+{
+    return unless $config->{'main'}->{'debug'} || $debug;
+    print STDERR sprintf shift, @_;
+    print STDERR "\n";
+}
+
+
+my $password = $config->{deluge}->{password} || '';
+my $delugeServer = $config->{deluge}->{server} || 'http://localhost:8112/';
+$delugeServer =~ s{/$}{};
+
+my ($torrentId) = @ARGV;
+{
+    my $js = JSON::Any->new('utf8'=>1);
+    my $ua = LWP::UserAgent->new;
+    $ua->timeout(3);
+    $ua->env_proxy;
+    $ua->cookie_jar( HTTP::Cookies->new( ) );
+    my $url = $delugeServer.'/json';
+    my $id = -1;
+
+    sub makeXMLRpc
+    {
+        my ($data) = @_;
+        $data->{id} ||= $id--;
+
+        my $req = HTTP::Request->new(POST => $url);
+        $req->content_type('application/json');
+        $req->content($js->encode($data));
+
+        debug("Calling $data->{method}");
+        my $ret;
+        while (1)
+        {
+            my $res = $ua->request($req);
+            if (!$res->is_success && $res->decoded_content =~ /500 read timeout/)
+            {
+                debug("Timeout Error. Sleeping for 2 and trying again");
+                sleep(2);
+                next;
+            }
+            die ("Error: " . $res->decoded_content) unless $res->is_success;
+
+            $ret = $js->decode($res->decoded_content);
+            if (defined $ret->{error} && $ret->{error}->{message})
+            {
+                die Dumper($ret->{error}->{code} . ': ' . $ret->{error}->{message})
+            }
+            last;
+        }
+
+        return $ret;
+    }
+}
+
+sub getTargetDirectoryForFile
+{
+    my ($file) = @_;
+    die("no file provided for getTargetDirectoryForFile") unless $file;
+    foreach my $regex (keys %$showData)
+    {
+        my $dir = $showData->{$regex};
+        my @results = $file =~ /$regex/;
+        next unless @results;
+        my $fullDir = sprintf($dir, @results);;
+
+        system("mkdir", "-p", $fullDir);
+        $fullDir .= '/' unless $fullDir =~ m{/$};
+        return $fullDir;
+    }
+}
+
+if(!$torrentId)
+{
+    my $res;
+    sleep(5); # let it sleep 5 seconds to do anything it needs to do.
+    makeXMLRpc({"method"=>"auth.login", "params"=>[$password]});
+    $res = makeXMLRpc({ "method"=>"core.get_torrents_status", "params"=>[[], ['progress', 'name', 'save_path']]});
+    foreach my $torrentId (keys %{$res->{result}})
+    {
+        my $data = $res->{result}->{$torrentId};
+        next unless $data->{progress} eq '100';
+        my $dir = getTargetDirectoryForFile($data->{name});
+
+        next unless $dir;
+        # Don't try to move multiple times
+        next if ($dir eq $data->{save_path});
+
+        warn("Moving $data->{name} to $dir\n");
+        makeXMLRpc({
+            'method' => 'core.move_storage',
+            'params' => [[$torrentId], $dir],
+        });
+
+    }
+}
+elsif (-d $torrentId)
+{
+    debug("processing directory - $torrentId");
+    ## MUHAHAH, torrentId is a directory
+    my @files = glob(File::Spec->catfile($torrentId, '*'));
+    foreach my $file (@files)
+    {
+        debug("Lookuping up file '$file'");
+        my $dir = getTargetDirectoryForFile(File::Basename::basename($file));
+        $dir or next;
+        debug("Moving $file to $dir");
+        File::Copy::move($file, $dir)
+            or warn("unable to move $file to $dir: $!");; 
+    }
+}
+elsif ($torrentId)
+{
+    my $res;
+
+    makeXMLRpc({"method"=>"auth.login", "params"=>[$password]});
+    eval {
+        $res = makeXMLRpc({ "method"=>"core.get_torrent_status", "params"=>[$torrentId, ['progress', 'name']]});
+    } or die("$torrentId no longer exists: $@");
+    $res = $res->{result};
+
+    my $dir = getTargetDirectoryForFile($res->{name});
+    die("No file provided for $res->{name}") unless $dir;
+
+    makeXMLRpc({
+        'method' => 'core.move_storage',
+        'params' => [[$torrentId], $dir],
+    });
+}
+
+    #makeXMLRpc({"method"=>"system.listMethods","params"=>[]});
+    #makeXMLRpc({ "method"=>"auth.check_session", "params"=>[]});

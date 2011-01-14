@@ -1,0 +1,35 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Data::Dumper;
+use JSON::Any;
+use HTTP::Cookies;
+use JSON::RPC::Client;
+
+my $client  = JSON::RPC::Client->new();
+$client->id(1);
+
+#my $url     = 'http://localhost:8180/jsonrpc';
+my $url     = 'http://meowcat.local:8180/jsonrpc';
+my $callObj = {
+    method => 'VideoLibrary.ScanForContent',
+    jsonrpc => '2.0',
+    #params => []
+};
+my $res = $client->call($url, $callObj);
+
+if ($res)
+{
+    if ($res->is_error)
+    {
+        print STDERR "Error : ", $res->error_message;
+    }
+    else
+    {
+        print STDERR $res->result;
+    }
+}
+else
+{
+    print STDERR $client->status_line;
+}
