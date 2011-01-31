@@ -1,0 +1,149 @@
+#!/usr/bin/perl 
+use strict;
+use warnings;
+
+use File::Basename qw();
+use File::Copy qw();
+use File::HomeDir;
+use Config::Tiny;
+use Getopt::Long;
+use Transmission::Client;
+use Data::Dumper;
+
+#exit(1) unless $ENV{VIM}; # for now till deluge is on or i fix this
+
+my $showData = {
+    qr/^\[DB\]_Bleach_/ => '/mnt/Drobo02/Unsorted Anime/Bleach/',
+
+    qr/^American.Dad.S(\d+)/             => '/media/Videos/TV/American Dad/Season %d/',
+    qr/^[Bb]urn.[nN]otice.[Ss](\d+)[Ee]/ => '/media/Videos/TV/Burn Notice/Season %d/',
+    qr/^Californication.S(\d+)/          => '/media/Videos/TV/Californication/Season %d/',
+    qr/^Caprica.S(\d+)/                  => '/media/Videos/TV/Caprica/Season %d/',
+    qr/^Castle.2009.*S(\d+)E/            => '/media/Videos/TV/Castle (2009)/Season %d/',
+    qr/^Community.S(\d+)/                => '/media/Videos/TV/Community/',
+    qr/^Conan.\d+/                       => '/media/Videos/TV/Conan (2010)/',
+    qr/^Dan.[Ff]or.Mayor.S(\d+)/         => '/media/Videos/TV/Dan For Mayor/',
+    qr/^Dexter.S(\d+)/                   => '/media/Videos/TV/Dexter/Season %d/',
+    qr/^Dirty.Jobs.S(\d+)/               => '/media/Videos/TV/Dirty Jobs/Season %d/',
+    qr/^Doctor.Who.2005.S(\d+)E/         => '/media/Videos/TV/Doctor Who (2005)/Season %d/',
+    qr/^Dollhouse.S(\d+)/                => '/media/Videos/TV/Dollhouse/Season %d/',
+    qr/^Episodes.S(\d+)/                 => '/media/Videos/TV/Episodes/Season %d/',
+    qr/^Eureka.S(\d+)/                   => '/media/Videos/TV/Eureka/Season %d/',
+    qr/^Family.Guy.S(\d+)/               => '/media/Videos/TV/Family Guy/Season %d/',
+    qr/^FlashForward.S(\d+)/             => '/media/Videos/TV/FlashForward/Season %d/',
+    qr/^Flashpoint.S(\d+)/               => '/media/Videos/TV/Flashpoint/Season %d/',
+    qr/^Fringe.S(\d+)/                   => '/media/Videos/TV/Fringe/Season %d/',
+    qr/^Futurama.S(\d+)E/                => '/media/Videos/TV/Futurama/Season %d/',
+    qr/^Glee.S(\d+)/                     => '/media/Videos/TV/Glee/',
+    qr/^Haven.S(\d+)/                    => '/media/Videos/TV/Haven/',
+    qr/^Hawaii.Five-0.2010.S(\d+)/       => '/media/Videos/TV/Hawaii Five-0 (2010)/Season %02d/',
+    qr/^Hiccups.S(\d+)E/                 => '/media/Videos/TV/Hiccups/',
+    qr/^How.I.Met.Your.Mother.S(\d+)/    => '/media/Videos/TV/How I met your mother/Season %d/',
+    qr/^InSecurity.S(\d+)/               => '/media/Videos/TV/InSecurity/Season %d/',
+    qr/^Kitchen Nightmares/              => '/media/Videos/TV/Kitchen Nightmares/',
+    qr/^Lost.Girl.S(\d+)/                => '/media/Videos/TV/Lost Girl/',
+    qr/^Louie.S(\d+)/                    => '/media/Videos/TV/Louie/',
+    qr/^Myth[bB]usters.S(\d+)/           => '/media/Videos/TV/MythBusters/Season %d/',
+    qr/^Nikita.S(\d+)/                   => '/media/Videos/TV/Nikita (2010)/',
+    qr/^No.Ordinary.Family.S(\d+)/       => '/media/Videos/TV/No Ordinary Family/Season %02d/',
+    qr/^Raising.Hope/                    => '/media/Videos/TV/Raising Hope',
+    qr/^Robot.Chicken.S(\d+)/            => '/media/Videos/TV/Robot Chicken/Season %02d/',
+    qr/^Rookie.Blue.S(\d+)/              => '/media/Videos/TV/Rookie Blue/',
+    qr/^Rubicon.S(\d+)E/                 => '/media/Videos/TV/Rubicon/',
+    qr/^Scrubs.S(\d+)E/                  => '/media/Videos/TV/Scrubs/Season %d/',
+    qr/^Sherlock.(\d+)x/                 => '/media/Videos/TV/Sherlock/',
+    qr/^Sherlock.S(\d+)E/                => '/media/Videos/TV/Sherlock/',
+    qr/^Shit.My.Dad.Says.S(\d+)E/        => '/media/Videos/TV/Shit My Dad Says/',
+    qr/^Stargate.Universe.S(\d+)/        => '/media/Videos/TV/Stargate Universe/Season %d/',
+    qr/^Terriers.S(\d+)E/                => '/media/Videos/TV/Terriers',
+    qr/^The.Big.Bang.Theory.S(\d+)/      => '/media/Videos/TV/The Big Bang Theory/Season %d/',
+    qr/^The.Cape.2011.S(\d+)/            => '/media/Videos/TV/The Cape (2011)/Season %02d/',
+    qr/^The.Gates.S(\d+)/                => '/media/Videos/TV/The Gates/',
+    qr/^The.Glades./                     => '/media/Videos/TV/The Glades/',
+    qr/^The.Mentalist.S(\d+)/            => '/media/Videos/TV/The Mentalist/Season %d/',
+    qr/^The.Simpsons.S(\d+)/             => '/media/Videos/TV/The Simpsons/Season %d/',
+    qr/^The.Walking.Dead.S(\d+)/         => '/media/Videos/TV/The Walking Dead/',
+    qr/^[t|T]ower.[p|P]rep.*S(\d+)E/     => '/media/Videos/TV/Tower Prep/Season %d/',
+    qr/^Ugly.Americans.S(\d+)E/          => '/media/Videos/TV/Ugly Americans/',
+    qr/^V.2009.*/                        => '/media/Videos/TV/V (2009)/',
+};
+
+my ($debug);
+$debug = 1 if $ENV{VIM};
+
+GetOptions("debug" => \$debug);    # flag
+
+sub debug
+{
+    return unless $debug;
+    print STDERR sprintf shift, @_;
+    print STDERR "\n";
+}
+
+my ($directory) = @ARGV;
+{
+    my $client = undef;
+
+    sub getClient
+    {
+        if (!$client)
+        {
+            $client = Transmission::Client->new();
+            ### pull from getOpt
+            #$client->url('localhost');
+            #$client->userame('');
+            #$client->password('');
+        }
+        return $client;
+    }
+}
+
+sub getTargetDirectoryForFile
+{
+    my ($file) = @_;
+    die("no file provided for getTargetDirectoryForFile") unless $file;
+    foreach my $regex (keys %$showData)
+    {
+        my $dir = $showData->{$regex};
+        my @results = $file =~ /$regex/;
+        next unless @results;
+        my $fullDir = sprintf($dir, @results);
+
+        system("mkdir", "-p", $fullDir);
+        $fullDir .= '/' unless $fullDir =~ m{/$};
+        return $fullDir;
+    }
+}
+
+if (!$directory)
+{
+    my $torrents = getClient()->torrents();
+    foreach my $torrent (@$torrents)
+    {
+        next unless $torrent->percent_done >= 1.00;
+        my $dir = getTargetDirectoryForFile($torrent->name);
+        if (!$dir)
+        {
+            debug("No directory for %s", $torrent->name);
+            next;
+        }
+        next if ($dir eq $torrent->download_dir());
+        warn("Moving ", $torrent->name, " to $dir\n");
+        $torrent->move($dir);
+    }
+}
+elsif (-d $directory)
+{
+    debug("processing directory - $directory");
+    ## MUHAHAH, directory is a directory
+    my @files = glob(File::Spec->catfile($directory, '*'));
+    foreach my $file (@files)
+    {
+        debug("Lookuping up file '$file'");
+        my $dir = getTargetDirectoryForFile(File::Basename::basename($file));
+        $dir or next;
+        debug("Moving $file to $dir");
+        File::Copy::move($file, $dir)
+          or warn("unable to move $file to $dir: $!");
+    }
+}
